@@ -13,6 +13,7 @@ from core.camera import Camera
 from detection.detector import Detector
 from utils.fps_counter import FPSCounter
 from depth_estimator import DepthEstimator
+from motion_tracker import MotionTracker
 
 depth_estimator = DepthEstimator()
 
@@ -120,6 +121,8 @@ def main():
     if not camera.open():
         sys.exit(1)
 
+    tracker = None
+    
     frame_count  = 0
     detections   = []
     depth_result = None
@@ -132,12 +135,22 @@ def main():
             print("[Main Loop] End of stream.")
             break
 
+        if tracker is None:
+            tracker = MotionTracker(frame.shape[1])
+
         frame_count += 1
         fps_ctr.tick()
 
         # ── YOLO ─────────────────────────────────────────────────────────────
         if frame_count % FRAME_SKIP == 0:
             detections = detector.detect(frame)
+
+            tracker.update(detections)
+            analysis = tracker.analyze(detections)
+
+            for obj in analysis:
+                print(f"[MOTION] {obj['label']} | {obj['zone']} | {obj['motion']} | {obj['approach']}")
+
             persons    = detector.get_persons(detections)
             obstacles  = detector.get_obstacles(detections)
 
