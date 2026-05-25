@@ -1,7 +1,7 @@
 # BlindAssist — Configuration
 
 # Camera source — webcam: 0, DroidCam: 1 or 2, video: r"C:\path\to\video.mp4"
-CAMERA_SOURCE = 1
+CAMERA_SOURCE = 0
 
 # YOLO
 YOLO_MODEL = "yolov8n.pt"
