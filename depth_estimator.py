@@ -132,24 +132,22 @@ class DepthEstimator:
         with self._lock:
             return self._latest_result
 
-    def draw_overlay(self, frame: np.ndarray, result: DepthResult) -> np.ndarray:
+    def draw_overlay(self, frame: np.ndarray, result) -> np.ndarray:
         """
-        Blend the depth heatmap onto frame.
-        Heatmap is upscaled from inference resolution here (cheap bilinear).
-        Per-pixel alpha is applied via numpy float32 — correct and artifact-free.
+        Optimized RAM-Friendly Overlay to prevent numpy._core._exceptions._ArrayMemoryError.
         """
-        if result is None:
+        if result is None or result.heatmap is None:
             return frame
 
-        h, w = frame.shape[:2]
-        hmap = cv2.resize(result.heatmap_bgr,  (w, h), interpolation=cv2.INTER_LINEAR)
-        mask = cv2.resize(result.heatmap_mask, (w, h), interpolation=cv2.INTER_LINEAR)
-
-        a   = mask.astype(np.float32) / 255.0
-        a3  = np.stack([a, a, a], axis=-1)
-        out = frame.astype(np.float32) * (1.0 - a3) + hmap.astype(np.float32) * a3
-        return np.clip(out, 0, 255).astype(np.uint8)
-
+        # Çökmeye sebep olan float32 dönüşümü yerine uint8 addWeighted kullanıyoruz
+        hmap = cv2.resize(result.heatmap, (frame.shape[1], frame.shape[2] if len(frame.shape)==3 else frame.shape[0]))
+        hmap = cv2.resize(result.heatmap, (frame.shape[1], frame.shape[0]))
+        
+        # %30 derinlik haritası, %70 orijinal frame birleştirmesi (RAM harcamaz)
+        alpha = 0.30
+        output = cv2.addWeighted(hmap, alpha, frame, 1.0 - alpha, 0)
+        return output
+    
     # ── Inference (background thread) ─────────────────────────────────────────
     def _run_inference(self, frame: np.ndarray):
         self._processing = True
