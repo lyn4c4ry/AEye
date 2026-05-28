@@ -1,0 +1,102 @@
+[1mdiff --git a/config.py b/config.py[m
+[1mindex b51c856..27bfba7 100644[m
+[1m--- a/config.py[m
+[1m+++ b/config.py[m
+[36m@@ -1,7 +1,7 @@[m
+ # BlindAssist — Configuration[m
+ [m
+ # Camera source — webcam: 0, DroidCam: 1 or 2, video: r"C:\path\to\video.mp4"[m
+[31m-CAMERA_SOURCE = 0[m
+[32m+[m[32mCAMERA_SOURCE = 1[m
+ [m
+ # YOLO[m
+ YOLO_MODEL = "yolov8n.pt"[m
+[36m@@ -60,56 +60,49 @@[m [mOBSTACLE_AREA_RATIO = 0.08[m
+ ALERT_COOLDOWN = 3.0[m
+ [m
+ # Display[m
+[31m-WINDOW_TITLE = "BlindAssist — Person 1 Module"[m
+[32m+[m[32mWINDOW_TITLE = "BlindAssist — AEye"[m
+ SHOW_LABELS = True[m
+ SHOW_FPS = True[m
+ BOX_COLOR_PERSON   = (0, 255, 100)[m
+ BOX_COLOR_OBSTACLE = (0, 100, 255)[m
+ BOX_COLOR_DEFAULT  = (200, 200, 200)[m
+ [m
+[31m-# ────────────────────────────────────────────────────────────────────────────[m
+[31m-# HAZARD DETECTION CONFIGURATION[m
+[31m-# ────────────────────────────────────────────────────────────────────────────[m
+[32m+[m[32m# ── HAZARD DETECTION (Kişi 4 — Melis) ────────────────────────────────────────[m
+ [m
+[31m-# Enable/Disable hazard detection system[m
+ ENABLE_HAZARD_DETECTION = True[m
+ [m
+[31m-# Approaching object detection thresholds[m
+[31m-APPROACHING_RISK_THRESHOLD = 5.0  # Minimum risk score to trigger alert[m
+[31m-COLLISION_RISK_AREA_THRESHOLD = 0.05  # Object size ratio for collision risk[m
+[31m-COLLISION_RISK_CENTER_WIDTH = 0.3  # Percentage of frame center for direct collision[m
+[31m-[m
+[31m-# Motion analysis thresholds[m
+[31m-MOTION_ALERT_THRESHOLD = 0.3  # Normalized motion magnitude (0-1)[m
+[31m-FRAME_DIFF_ALERT_THRESHOLD = 15.0  # Percentage of changed pixels[m
+[31m-CROWDED_MOTION_THRESHOLD = 0.5  # Motion severity for crowd detection[m
+[31m-[m
+[31m-# Hazard alert cooldowns (seconds) - prevent overwhelming user[m
+[31m-HAZARD_COOLDOWN_INFO = 5.0[m
+[31m-HAZARD_COOLDOWN_WARNING = 2.5[m
+[31m-HAZARD_COOLDOWN_DANGER = 2.0[m
+[32m+[m[32m# Approaching object detection[m
+[32m+[m[32mAPPROACHING_RISK_THRESHOLD     = 5.0   # minimum risk score to trigger alert[m
+[32m+[m[32mCOLLISION_RISK_AREA_THRESHOLD  = 0.05  # object size ratio for collision risk[m
+[32m+[m[32mCOLLISION_RISK_CENTER_WIDTH    = 0.3   # percentage of frame center for direct collision[m
+[32m+[m
+[32m+[m[32m# Motion analysis[m
+[32m+[m[32mMOTION_ALERT_THRESHOLD        = 0.3   # normalized motion magnitude (0-1)[m
+[32m+[m[32mFRAME_DIFF_ALERT_THRESHOLD    = 15.0  # percentage of changed pixels[m
+[32m+[m[32mCROWDED_MOTION_THRESHOLD      = 0.5   # motion severity for crowd detection[m
+[32m+[m[32mMOTION_ANALYSIS_ENABLED       = True[m
+[32m+[m[32mOPTICAL_FLOW_WINDOW_SIZE      = 15[m
+[32m+[m[32mOPTICAL_FLOW_PYRAMID_LEVELS   = 3[m
+[32m+[m[32mFRAME_DIFF_THRESHOLD_PIXEL_VALUE = 30[m
+[32m+[m
+[32m+[m[32m# Hazard alert cooldowns (seconds)[m
+[32m+[m[32mHAZARD_COOLDOWN_INFO      = 5.0[m
+[32m+[m[32mHAZARD_COOLDOWN_WARNING   = 2.5[m
+[32m+[m[32mHAZARD_COOLDOWN_DANGER    = 2.0[m
+ HAZARD_COOLDOWN_EMERGENCY = 1.0[m
+ [m
+[31m-# Global voice feedback cooldown (minimum time between any two announcements)[m
+[32m+[m[32m# Global voice feedback cooldown[m
+ VOICE_FEEDBACK_GLOBAL_COOLDOWN = 1.0[m
+ [m
+[31m-# High-priority object classes for collision detection[m
+[32m+[m[32m# High-priority classes for collision detection[m
+ COLLISION_PRIORITY_CLASSES = {[m
+[31m-    "car": 10,[m
+[31m-    "truck": 12,[m
+[31m-    "bus": 11,[m
+[31m-    "motorcycle": 8,[m
+[31m-    "person": 5,[m
+[32m+[m[32m    "car":        10,[m
+[32m+[m[32m    "truck":      12,[m
+[32m+[m[32m    "bus":        11,[m
+[32m+[m[32m    "motorcycle":  8,[m
+[32m+[m[32m    "person":      5,[m
+ }[m
+ [m
+[31m-# Environmental hazard classes[m
+[31m-ENVIRONMENTAL_HAZARDS = {"fire", "smoke"}[m
+[31m-[m
+[31m-# Road work detection indicators[m
+[31m-ROAD_WORK_INDICATORS = {"traffic cone", "stop sign", "person"}[m
+[31m-[m
+[31m-# Motion analysis parameters[m
+[31m-MOTION_ANALYSIS_ENABLED = True[m
+[31m-OPTICAL_FLOW_WINDOW_SIZE = 15[m
+[31m-OPTICAL_FLOW_PYRAMID_LEVELS = 3[m
+[31m-FRAME_DIFF_THRESHOLD_PIXEL_VALUE = 30  # Pixel value difference threshold[m
+\ No newline at end of file[m
+[32m+[m[32m# Environmental hazards[m
+[32m+[m[32mENVIRONMENTAL_HAZARDS  = {"fire", "smoke"}[m
+[32m+[m[32mROAD_WORK_INDICATORS   = {"traffic cone", "stop sign", "person"}[m
+\ No newline at end of file[m

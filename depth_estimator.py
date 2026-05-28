@@ -1,31 +1,10 @@
 """
 depth_estimator.py — AEye Project
-Heatmap-based structural obstacle detection for visually impaired assistance.
+Edge-based structural obstacle detection for visually impaired assistance.
 
-Detects walls, floors, doors and other surfaces that YOLO cannot label,
-and provides directional audio alerts ("Close obstacle on the left.").
-
-Usage (in main.py):
-    from depth_estimator import DepthEstimator
-
-    de = DepthEstimator()          # starts loading MiDaS in background
-
-    # inside the main loop:
-    result = de.estimate(frame)
-    if result:
-        frame = de.draw_overlay(frame, result)
-        for alert in result.prop_alerts:
-            alert_manager.say(alert)   # pass to your TTS/AlertManager
-
-Color scale (COLORMAP_JET):
-    Blue  = far / safe
-    Green / Yellow = medium distance
-    Red   = close / danger
-
-Performance:
-    - MiDaS runs on 256px-wide frames, result is upscaled (cheap)
-    - Time-based scheduling prevents overlapping inference threads
-    - draw_overlay runs entirely on the main thread with no heavy math
+Draws colored depth edges on surfaces (walls, floors, doors).
+Close edges = red/orange, far edges = cyan/blue.
+No heatmap flood — camera image stays clean and readable.
 """
 
 import cv2
@@ -36,66 +15,58 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 # ── Config ────────────────────────────────────────────────────────────────────
-INFERENCE_WIDTH    = 256   # MiDaS input width — lower = faster (min ~192)
-INFERENCE_INTERVAL = 0.15  # min seconds between depth updates (~6-7 fps)
+INFERENCE_WIDTH    = 192
+INFERENCE_INTERVAL = 0.25
 
-CLOSE_THRESHOLD       = 0.68  # zone mean above this → "close" alert
-MEDIUM_THRESHOLD      = 0.45  # zone mean above this → "medium" alert
-DEPTH_ALERT_COOLDOWN  = 3.0   # min seconds between alerts for the same zone
-LOCAL_NORM_PERCENTILE = 85    # suppress top N% outliers in local normalization
+CLOSE_THRESHOLD      = 0.68
+MEDIUM_THRESHOLD     = 0.45
+DEPTH_ALERT_COOLDOWN = 3.0
 
-HEATMAP_ALPHA_MIN   = 0.03   # opacity for distant surfaces
-HEATMAP_ALPHA_MAX   = 0.52   # opacity for close surfaces
-HEATMAP_ALPHA_GAMMA = 3.0    # curve shape — higher keeps far areas more transparent
+# Edge detection
+SOBEL_THRESHOLD  = 15    # düşür = daha fazla kenar, artır = sadece belirgin kenarlar
+EDGE_LINE_WIDTH  = 1     # kenar çizgi kalınlığı (piksel)
+
+# Renk geçişi: uzak=cyan, yakın=kırmızı (BGR)
+COLOR_FAR   = (255, 200, 0)   # cyan-mavi
+COLOR_MID   = (0, 200, 255)   # turuncu-sarı
+COLOR_CLOSE = (0, 50, 255)    # kırmızı
 
 ZONE_ROWS = 3
 ZONE_COLS = 3
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def _odd(n: int) -> int:
-    """Return n if already odd, else n+1. OpenCV kernel sizes must be odd."""
-    return n if n % 2 == 1 else n + 1
 
 
 # ── Result dataclass ──────────────────────────────────────────────────────────
 @dataclass
 class DepthResult:
     depth_map:    np.ndarray  # global normalized depth [0-1], full frame res
-    heatmap_bgr:  np.ndarray  # JET-colored overlay, inference res (upscaled in draw)
-    heatmap_mask: np.ndarray  # uint8 alpha mask [0-255], inference res
-    close_zones:  list = field(default_factory=list)  # e.g. ["left", "center"]
-    medium_zones: list = field(default_factory=list)  # e.g. ["right"]
-    prop_alerts:  list = field(default_factory=list)  # e.g. ["Close obstacle ahead."]
+    heatmap_bgr:  np.ndarray  # edge overlay (API compat adı korundu)
+    heatmap_mask: np.ndarray  # edge mask
+    close_zones:  list = field(default_factory=list)
+    medium_zones: list = field(default_factory=list)
+    prop_alerts:  list = field(default_factory=list)
 
 
 # ── Main class ────────────────────────────────────────────────────────────────
 class DepthEstimator:
-    """
-    Runs MiDaS depth estimation in a background thread.
-    The main loop is never blocked — estimate() always returns immediately.
-    """
-
     def __init__(self):
         self._model     = None
         self._transform = None
         self._device    = None
         self._ready     = False
 
-        self._lock                              = threading.Lock()
+        self._lock                                 = threading.Lock()
         self._latest_result: Optional[DepthResult] = None
-        self._processing                        = False
-        self._last_inference_time               = 0.0
-        self._last_alert_time: dict[str, float] = {}
+        self._processing                           = False
+        self._last_inference_time                  = 0.0
+        self._last_alert_time: dict[str, float]    = {}
 
         threading.Thread(target=self._load_model, daemon=True).start()
 
     # ── Model loading ──────────────────────────────────────────────────────────
     def _load_model(self):
-        """Download and init MiDaS Small (~80 MB on first run)."""
         try:
             import torch
-            import timm  # noqa: F401 — required by MiDaS internals
+            import timm  # noqa: F401
 
             self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             print(f"[Depth] Loading MiDaS Small on {self._device}...")
@@ -113,12 +84,6 @@ class DepthEstimator:
 
     # ── Public API ─────────────────────────────────────────────────────────────
     def estimate(self, frame: np.ndarray) -> Optional[DepthResult]:
-        """
-        Call every frame in the main loop.
-        Spawns a background inference thread only when the previous one has
-        finished AND at least INFERENCE_INTERVAL seconds have passed.
-        Returns the latest DepthResult, or None if the model isn't ready yet.
-        """
         if not self._ready:
             return None
 
@@ -132,22 +97,28 @@ class DepthEstimator:
         with self._lock:
             return self._latest_result
 
-    def draw_overlay(self, frame: np.ndarray, result) -> np.ndarray:
+    def draw_overlay(self, frame: np.ndarray, result: Optional[DepthResult]) -> np.ndarray:
         """
-        Optimized RAM-Friendly Overlay to prevent numpy._core._exceptions._ArrayMemoryError.
+        Edge overlay: sadece yüzey kenarlarını renkli çizer.
+        Kamera görüntüsü temiz kalır, duvar/zemin sınırları belirginleşir.
         """
-        if result is None or result.heatmap is None:
+        if result is None or result.heatmap_bgr is None:
             return frame
 
-        # Çökmeye sebep olan float32 dönüşümü yerine uint8 addWeighted kullanıyoruz
-        hmap = cv2.resize(result.heatmap, (frame.shape[1], frame.shape[2] if len(frame.shape)==3 else frame.shape[0]))
-        hmap = cv2.resize(result.heatmap, (frame.shape[1], frame.shape[0]))
-        
-        # %30 derinlik haritası, %70 orijinal frame birleştirmesi (RAM harcamaz)
-        alpha = 0.30
-        output = cv2.addWeighted(hmap, alpha, frame, 1.0 - alpha, 0)
+        h, w = frame.shape[:2]
+        edge_overlay = cv2.resize(result.heatmap_bgr, (w, h), interpolation=cv2.INTER_NEAREST)
+
+        # Sadece kenar olan pikselleri üst üste koy
+        edge_mask = cv2.resize(result.heatmap_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+        mask_bool = edge_mask > 0
+
+        output = frame.copy()
+        output[mask_bool] = cv2.addWeighted(
+            edge_overlay, 0.85, frame, 0.15, 0
+        )[mask_bool]
+
         return output
-    
+
     # ── Inference (background thread) ─────────────────────────────────────────
     def _run_inference(self, frame: np.ndarray):
         self._processing = True
@@ -156,7 +127,6 @@ class DepthEstimator:
 
             h, w = frame.shape[:2]
 
-            # Downscale frame for faster MiDaS inference
             scale     = INFERENCE_WIDTH / w
             inf_h     = max(int(h * scale), 32)
             small_bgr = cv2.resize(frame, (INFERENCE_WIDTH, inf_h), interpolation=cv2.INTER_AREA)
@@ -172,25 +142,24 @@ class DepthEstimator:
 
             depth_np = raw.cpu().numpy().astype(np.float32)
 
-            # Global norm [0=far, 1=close] — stored for potential external use
-            d_min, d_max = depth_np.min(), depth_np.max()
-            if d_max - d_min < 1e-6:
+            # Percentile norm — outlier'lar skalayı ezmesin
+            p_low  = np.percentile(depth_np, 5)
+            p_high = np.percentile(depth_np, 95)
+            if p_high - p_low < 1e-6:
                 return
-            global_norm      = (depth_np - d_min) / (d_max - d_min)
-            global_norm_full = cv2.resize(global_norm, (w, h), interpolation=cv2.INTER_LINEAR)
 
-            # Local norm — makes distant objects visible relative to their region
-            local_norm = self._local_normalize(depth_np, inf_h, INFERENCE_WIDTH)
+            norm      = np.clip((depth_np - p_low) / (p_high - p_low), 0.0, 1.0)
+            norm_full = cv2.resize(norm, (w, h), interpolation=cv2.INTER_LINEAR)
 
-            heatmap_bgr, heatmap_mask = self._build_heatmap(local_norm)
-            close_z, medium_z         = self._analyze_zones(local_norm, inf_h, INFERENCE_WIDTH)
-            alerts                    = self._build_alerts(close_z, medium_z)
+            edge_overlay, edge_mask = self._build_edges(norm)
+            close_z, medium_z       = self._analyze_zones(norm, inf_h, INFERENCE_WIDTH)
+            alerts                  = self._build_alerts(close_z, medium_z)
 
             with self._lock:
                 self._latest_result = DepthResult(
-                    depth_map    = global_norm_full,
-                    heatmap_bgr  = heatmap_bgr,
-                    heatmap_mask = heatmap_mask,
+                    depth_map    = norm_full,
+                    heatmap_bgr  = edge_overlay,
+                    heatmap_mask = edge_mask,
                     close_zones  = close_z,
                     medium_zones = medium_z,
                     prop_alerts  = alerts,
@@ -200,46 +169,61 @@ class DepthEstimator:
         finally:
             self._processing = False
 
-    # ── Local normalization ────────────────────────────────────────────────────
-    def _local_normalize(self, depth_np: np.ndarray, h: int, w: int) -> np.ndarray:
+    # ── Edge builder ───────────────────────────────────────────────────────────
+    def _build_edges(self, norm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """
-        Normalize each pixel relative to its local neighborhood using a large
-        Gaussian window. This ensures distant objects (e.g. a dresser 1.5 m away)
-        show up as red/yellow in their region even when something closer dominates
-        the global depth range. No grid — output is fully continuous.
+        Sobel gradient ile depth kenarlarını tespit et.
+        Her kenar pikselini derinliğine göre renklendir:
+          yakın → kırmızı, orta → turuncu/sarı, uzak → cyan
         """
-        k          = _odd(max(h, w) // 2)
-        local_mean = cv2.GaussianBlur(depth_np, (k, k), 0)
-        residual   = depth_np - local_mean
-        p_max      = np.percentile(residual, LOCAL_NORM_PERCENTILE)
-        p_min      = residual.min()
-        if p_max - p_min < 1e-6:
-            return np.zeros_like(depth_np)
-        clipped = np.clip(residual, p_min, p_max)
-        return ((clipped - p_min) / (p_max - p_min)).astype(np.float32)
+        depth_u8 = (norm * 255).astype(np.uint8)
 
-    # ── Heatmap builder ────────────────────────────────────────────────────────
-    def _build_heatmap(self, norm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Convert normalized depth to a JET colormap image + alpha mask.
-        Alpha follows a power curve: far pixels get ALPHA_MIN, close pixels
-        get ALPHA_MAX. GAMMA > 1 keeps distant areas transparent so the camera
-        image stays readable, then ramps up sharply for close surfaces.
-        """
-        depth_u8     = (norm * 255).astype(np.uint8)
-        heatmap_bgr  = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
-        alpha_f      = (HEATMAP_ALPHA_MIN +
-                        (HEATMAP_ALPHA_MAX - HEATMAP_ALPHA_MIN) *
-                        np.power(norm, HEATMAP_ALPHA_GAMMA))
-        heatmap_mask = (alpha_f * 255).astype(np.uint8)
-        return heatmap_bgr, heatmap_mask
+        # Sobel edge detection
+        sobel_x = cv2.Sobel(depth_u8, cv2.CV_32F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(depth_u8, cv2.CV_32F, 0, 1, ksize=3)
+        magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
+        magnitude = np.clip(magnitude / magnitude.max(), 0, 1) if magnitude.max() > 0 else magnitude
+
+        # Threshold — sadece belirgin kenarlar
+        edge_mask_bool = magnitude > (SOBEL_THRESHOLD / 255.0)
+
+        h, w = norm.shape
+        edge_overlay = np.zeros((h, w, 3), dtype=np.uint8)
+        edge_mask    = np.zeros((h, w),    dtype=np.uint8)
+
+        if not edge_mask_bool.any():
+            return edge_overlay, edge_mask
+
+        # Her kenar pikselini derinliğine göre renklendir
+        edge_depths = norm[edge_mask_bool]
+
+        colors = np.zeros((edge_depths.shape[0], 3), dtype=np.uint8)
+
+        # Uzak (0.0 - 0.4) → cyan
+        far_mask = edge_depths < 0.4
+        colors[far_mask] = COLOR_FAR
+
+        # Orta (0.4 - 0.7) → turuncu/sarı
+        mid_mask = (edge_depths >= 0.4) & (edge_depths < 0.7)
+        colors[mid_mask] = COLOR_MID
+
+        # Yakın (0.7 - 1.0) → kırmızı
+        close_mask = edge_depths >= 0.7
+        colors[close_mask] = COLOR_CLOSE
+
+        edge_overlay[edge_mask_bool] = colors
+        edge_mask[edge_mask_bool]    = 255
+
+        # Kenar çizgilerini biraz kalınlaştır — ince piksel çizgiler görünmez olur
+        if EDGE_LINE_WIDTH > 1:
+            kernel = np.ones((EDGE_LINE_WIDTH, EDGE_LINE_WIDTH), np.uint8)
+            edge_mask    = cv2.dilate(edge_mask,    kernel, iterations=1)
+            edge_overlay = cv2.dilate(edge_overlay, kernel, iterations=1)
+
+        return edge_overlay, edge_mask
 
     # ── Zone analysis ──────────────────────────────────────────────────────────
     def _analyze_zones(self, norm: np.ndarray, h: int, w: int) -> tuple[list, list]:
-        """
-        Divide the frame into a 3x3 grid and check mean depth per cell.
-        Used only for audio alert logic — never drawn on screen.
-        """
         row_h = h // ZONE_ROWS
         col_w = w // ZONE_COLS
         zone_names = {
@@ -261,10 +245,6 @@ class DepthEstimator:
 
     # ── Alert builder ──────────────────────────────────────────────────────────
     def _build_alerts(self, close_zones: list, medium_zones: list) -> list:
-        """
-        Convert zone names to TTS-ready alert strings with cooldown protection.
-        Direction: left-* → "on the left", right-* → "on the right", else "ahead".
-        """
         now    = time.time()
         alerts = []
 
