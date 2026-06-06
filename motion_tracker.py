@@ -6,25 +6,25 @@ class MotionTracker:
     def __init__(self, frame_width):
         self.frame_width = frame_width
 
-        # objeleri tutma (label bazlı basit tracking)
+        # Object state storage (label-based simple tracking)
         self.objects = {}
 
-        # zone boundaries (1/3 - 1/3 - 1/3)
+        # Zone boundaries: left | center | right (1/3 splits)
         self.left_bound = frame_width / 3
         self.right_bound = 2 * frame_width / 3
 
     # ─────────────────────────────────────────────
-    # detection update
+    # Detection update
     # ─────────────────────────────────────────────
     def update(self, detections):
         """
-        detections: Detector çıktısı (Detection list)
+        detections: Detection list from Detector
         """
         for det in detections:
             cx, cy = det.center
             label = det.label
 
-            # basit ID (ileride geliştirilebilir)
+            # Simple ID per label (can be extended with proper tracking later)
             obj_id = f"{label}"
 
             if obj_id not in self.objects:
@@ -36,16 +36,16 @@ class MotionTracker:
 
             obj = self.objects[obj_id]
 
-            # geçmişe ekle
+            # Add current position to history
             obj["history"].append((cx, cy, det.area_ratio))
             obj["last_seen"] = time.time()
 
-            # son 5 frame tut
+            # Keep only the last 5 frames
             if len(obj["history"]) > 5:
                 obj["history"].pop(0)
 
     # ─────────────────────────────────────────────
-    # horizontal zone detection
+    # Horizontal zone detection
     # ─────────────────────────────────────────────
     def get_zone(self, cx):
         if cx < self.left_bound:
@@ -56,7 +56,7 @@ class MotionTracker:
             return "right"
 
     # ─────────────────────────────────────────────
-    # movement direction
+    # Movement direction
     # ─────────────────────────────────────────────
     def get_motion(self, obj_id):
         obj = self.objects.get(obj_id)
@@ -76,7 +76,7 @@ class MotionTracker:
             return "static"
 
     # ─────────────────────────────────────────────
-    # approaching detection (size change)
+    # Approaching detection (based on bounding box size change)
     # ─────────────────────────────────────────────
     def get_approach(self, obj_id):
         obj = self.objects.get(obj_id)
@@ -94,7 +94,7 @@ class MotionTracker:
             return "stable"
 
     # ─────────────────────────────────────────────
-    # full analysis (SENİN ANA FONKSİYONUN)
+    # Full analysis — main output function
     # ─────────────────────────────────────────────
     def analyze(self, detections):
         results = []

@@ -22,14 +22,14 @@ CLOSE_THRESHOLD      = 0.68
 MEDIUM_THRESHOLD     = 0.45
 DEPTH_ALERT_COOLDOWN = 3.0
 
-# Edge detection
-SOBEL_THRESHOLD  = 15    # düşür = daha fazla kenar, artır = sadece belirgin kenarlar
-EDGE_LINE_WIDTH  = 1     # kenar çizgi kalınlığı (piksel)
+# Edge detection settings
+SOBEL_THRESHOLD  = 15    # lower = more edges detected, higher = only strong edges
+EDGE_LINE_WIDTH  = 1     # edge line thickness in pixels
 
-# Renk geçişi: uzak=cyan, yakın=kırmızı (BGR)
-COLOR_FAR   = (255, 200, 0)   # cyan-mavi
-COLOR_MID   = (0, 200, 255)   # turuncu-sarı
-COLOR_CLOSE = (0, 50, 255)    # kırmızı
+# Color scheme: far=cyan, close=red (BGR format)
+COLOR_FAR   = (255, 200, 0)   # cyan-blue
+COLOR_MID   = (0, 200, 255)   # orange-yellow
+COLOR_CLOSE = (0, 50, 255)    # red
 
 ZONE_ROWS = 3
 ZONE_COLS = 3
@@ -38,8 +38,8 @@ ZONE_COLS = 3
 # ── Result dataclass ──────────────────────────────────────────────────────────
 @dataclass
 class DepthResult:
-    depth_map:    np.ndarray  # global normalized depth [0-1], full frame res
-    heatmap_bgr:  np.ndarray  # edge overlay (API compat adı korundu)
+    depth_map:    np.ndarray  # globally normalized depth [0-1], full frame resolution
+    heatmap_bgr:  np.ndarray  # edge overlay (field name kept for API compatibility)
     heatmap_mask: np.ndarray  # edge mask
     close_zones:  list = field(default_factory=list)
     medium_zones: list = field(default_factory=list)
@@ -99,8 +99,8 @@ class DepthEstimator:
 
     def draw_overlay(self, frame: np.ndarray, result: Optional[DepthResult]) -> np.ndarray:
         """
-        Edge overlay: sadece yüzey kenarlarını renkli çizer.
-        Kamera görüntüsü temiz kalır, duvar/zemin sınırları belirginleşir.
+        Edge overlay: only draws colored lines on surface boundaries.
+        Camera image stays clean — walls and floor edges become visible.
         """
         if result is None or result.heatmap_bgr is None:
             return frame
@@ -108,7 +108,7 @@ class DepthEstimator:
         h, w = frame.shape[:2]
         edge_overlay = cv2.resize(result.heatmap_bgr, (w, h), interpolation=cv2.INTER_NEAREST)
 
-        # Sadece kenar olan pikselleri üst üste koy
+        # Only blend pixels where edges were detected
         edge_mask = cv2.resize(result.heatmap_mask, (w, h), interpolation=cv2.INTER_NEAREST)
         mask_bool = edge_mask > 0
 
@@ -142,7 +142,7 @@ class DepthEstimator:
 
             depth_np = raw.cpu().numpy().astype(np.float32)
 
-            # Percentile norm — outlier'lar skalayı ezmesin
+            # Percentile normalization — prevents outliers from dominating the scale
             p_low  = np.percentile(depth_np, 5)
             p_high = np.percentile(depth_np, 95)
             if p_high - p_low < 1e-6:
@@ -172,9 +172,9 @@ class DepthEstimator:
     # ── Edge builder ───────────────────────────────────────────────────────────
     def _build_edges(self, norm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """
-        Sobel gradient ile depth kenarlarını tespit et.
-        Her kenar pikselini derinliğine göre renklendir:
-          yakın → kırmızı, orta → turuncu/sarı, uzak → cyan
+        Detect depth edges using Sobel gradient.
+        Color each edge pixel based on its depth:
+          close → red, medium → orange/yellow, far → cyan
         """
         depth_u8 = (norm * 255).astype(np.uint8)
 
@@ -184,7 +184,7 @@ class DepthEstimator:
         magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
         magnitude = np.clip(magnitude / magnitude.max(), 0, 1) if magnitude.max() > 0 else magnitude
 
-        # Threshold — sadece belirgin kenarlar
+        # Threshold — keep only significant edges
         edge_mask_bool = magnitude > (SOBEL_THRESHOLD / 255.0)
 
         h, w = norm.shape
@@ -194,27 +194,27 @@ class DepthEstimator:
         if not edge_mask_bool.any():
             return edge_overlay, edge_mask
 
-        # Her kenar pikselini derinliğine göre renklendir
+        # Color each edge pixel based on its depth value
         edge_depths = norm[edge_mask_bool]
 
         colors = np.zeros((edge_depths.shape[0], 3), dtype=np.uint8)
 
-        # Uzak (0.0 - 0.4) → cyan
+        # Far range (0.0 - 0.4) → cyan
         far_mask = edge_depths < 0.4
         colors[far_mask] = COLOR_FAR
 
-        # Orta (0.4 - 0.7) → turuncu/sarı
+        # Mid range (0.4 - 0.7) → orange/yellow
         mid_mask = (edge_depths >= 0.4) & (edge_depths < 0.7)
         colors[mid_mask] = COLOR_MID
 
-        # Yakın (0.7 - 1.0) → kırmızı
+        # Close range (0.7 - 1.0) → red
         close_mask = edge_depths >= 0.7
         colors[close_mask] = COLOR_CLOSE
 
         edge_overlay[edge_mask_bool] = colors
         edge_mask[edge_mask_bool]    = 255
 
-        # Kenar çizgilerini biraz kalınlaştır — ince piksel çizgiler görünmez olur
+        # Slightly dilate edges — single-pixel lines are hard to see on screen
         if EDGE_LINE_WIDTH > 1:
             kernel = np.ones((EDGE_LINE_WIDTH, EDGE_LINE_WIDTH), np.uint8)
             edge_mask    = cv2.dilate(edge_mask,    kernel, iterations=1)

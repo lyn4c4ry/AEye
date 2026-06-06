@@ -1,6 +1,6 @@
 """
 BlindAssist — Ultimate Real-Time Tracking & Memory Optimization Module
-Entegrasyon: DangerZoneAnalyzer, HazardAnalyzer, MotionAnalyzer, VoiceFeedbackManager
+Integration: DangerZoneAnalyzer, HazardAnalyzer, MotionAnalyzer, VoiceFeedbackManager
 """
 
 import sys
@@ -21,7 +21,7 @@ from depth_estimator import DepthEstimator
 from motion_tracker import MotionTracker
 from voice_assistant import VoiceAssistant
 
-# ── Kişi 4 modülleri ─────────────────────────────────────────────────────────
+# ── Hazard and danger analysis modules ───────────────────────────────────────
 from danger_zone_analyzer import DangerZoneAnalyzer
 from hazard_analyzer import HazardAnalyzer, HazardLevel
 from motion_analyzer import MotionAnalyzer
@@ -35,7 +35,7 @@ COLOR_DIM      = (70, 70, 70)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Yardımcı çizim fonksiyonları
+# Drawing helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def draw_corner_box(frame, x1, y1, x2, y2, color, thickness=2):
@@ -66,7 +66,7 @@ def draw_detections(frame, detections):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Ana döngü
+# Main loop
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
@@ -82,17 +82,17 @@ def main():
     if not camera.open():
         sys.exit(1)
 
-    # Çözünürlük bilgisini al (ilk frame gelmeden boyutları bilmiyoruz,
-    # geçici 1280x720 ile başlatıp ilk frame'de yeniden oluşturuyoruz)
+    # Get resolution info (we don't know actual frame size until first frame arrives,
+    # so we start with a default 1280x720 and rebuild hazard modules on first frame)
     FRAME_W, FRAME_H = 1280, 720
 
-    # ── Kişi 4 — modül başlatma ───────────────────────────────────────────────
+    # ── Hazard analysis modules — initialization ──────────────────────────────
     danger_analyzer  = DangerZoneAnalyzer(FRAME_W, FRAME_H, grid_size=6)
     hazard_analyzer  = HazardAnalyzer()
     motion_analyzer  = MotionAnalyzer(FRAME_W, FRAME_H)
     feedback_manager = VoiceFeedbackManager(global_cooldown=VOICE_FEEDBACK_GLOBAL_COOLDOWN)
 
-    # Kişi 4 modülleri frame boyutuna göre yeniden oluşturuldu mu?
+    # Track whether hazard modules have been re-initialized with real frame size
     p4_initialized = False
 
     tracker     = None
@@ -100,13 +100,13 @@ def main():
     detections  = []
     depth_result = None
 
-    # ── Ortam hafızası ────────────────────────────────────────────────────────
+    # ── Environment memory ────────────────────────────────────────────────────
     start_time           = time.time()
     initial_scan_done    = False
     tracked_environment_memory = {}
     buffered_scan_objects      = {}
 
-    # İnsan takip hafızası
+    # Person tracking state
     is_person_in_room     = False
     person_missing_frames = 0
     person_distance_state = "unknown"
@@ -115,7 +115,7 @@ def main():
     print("\n[Main Loop] Running — press 'q' to quit\n")
 
     while True:
-        # ── Frame oku ─────────────────────────────────────────────────────────
+        # ── Read frame ────────────────────────────────────────────────────────
         try:
             ret, frame = camera.read()
             if not ret or frame is None:
@@ -128,7 +128,7 @@ def main():
         frame_count += 1
         fps_ctr.tick()
 
-        # ── İlk frame'de gerçek boyutu al, Kişi 4 modüllerini yeniden init et
+        # ── On first frame, get real resolution and re-initialize hazard modules
         if not p4_initialized:
             FRAME_H, FRAME_W = frame.shape[:2]
             danger_analyzer  = DangerZoneAnalyzer(FRAME_W, FRAME_H, grid_size=6)
@@ -138,15 +138,15 @@ def main():
         if tracker is None:
             tracker = MotionTracker(frame.shape[1])
 
-        # ── Derinlik tahmini (thread'de, bloklamaz) ───────────────────────────
+        # ── Depth estimation (runs in thread, non-blocking) ───────────────────
         depth_result = depth_estimator.estimate(frame)
 
-        # ── Motion analizi (Kişi 4 — her frame'de çalışır) ───────────────────
+        # ── Motion analysis (runs every frame) ───────────────────────────────
         motion_result = None
         if MOTION_ANALYSIS_ENABLED:
             motion_result = motion_analyzer.analyze(frame)
 
-            # Anormal hareket uyarısı → VoiceFeedbackManager'a ilet
+            # Forward abnormal motion alert to VoiceFeedbackManager
             if motion_result.get("is_abnormal"):
                 desc = motion_result.get("description", "")
                 if desc:
@@ -155,19 +155,19 @@ def main():
                     )
                     feedback_manager.add_feedback(msg, key, pri, cooldown=3.0)
 
-        # ── YOLO + tracker her FRAME_SKIP'te ──────────────────────────────────
+        # ── YOLO + tracker runs every FRAME_SKIP frames ───────────────────────
         if frame_count % FRAME_SKIP == 0:
             detections = detector.detect(frame)
             tracker.update(detections)
             analysis = tracker.analyze(detections)
 
-            # ── Kişi 4 — Tehlike bölgesi analizi ─────────────────────────────
+            # ── Danger zone analysis ──────────────────────────────────────────
             p4_danger_result = None
             if ENABLE_HAZARD_DETECTION and detections:
                 depth_map_for_p4 = depth_result.depth_map if depth_result is not None else None
                 p4_danger_result = danger_analyzer.analyze(detections, depth_map=depth_map_for_p4)
 
-                # Güvenli yön sesli rehberlik
+                # Safe direction audio guidance
                 guidance = danger_analyzer.get_directional_guidance(p4_danger_result)
                 if guidance:
                     overall_safety = p4_danger_result.get("overall_safety", 1.0)
@@ -177,7 +177,7 @@ def main():
                     )
                     feedback_manager.add_feedback(msg, key, pri, cooldown=4.0)
 
-            # ── Kişi 4 — HazardAnalyzer ──────────────────────────────────────
+            # ── Hazard detection and classification ───────────────────────────
             if ENABLE_HAZARD_DETECTION and detections:
                 motion_data = None
                 if motion_result:
@@ -190,7 +190,7 @@ def main():
                 )
 
                 for event in hazard_events:
-                    # HazardLevel → int dönüşümü
+                    # Convert HazardLevel enum to int for priority mapping
                     level_int = event.level.value  # INFO=0, WARNING=1, DANGER=2, EMERGENCY=3
                     msg, key, pri = feedback_manager.hazard_to_feedback(
                         event.hazard_type,
@@ -201,18 +201,17 @@ def main():
                     force = event.level in (HazardLevel.EMERGENCY, HazardLevel.DANGER)
                     feedback_manager.add_feedback(msg, key, pri, cooldown=2.0, force=force)
 
-            # ── Kişi 4 — VoiceFeedbackManager → VoiceAssistant'a aktar ───────
+            # ── Forward VoiceFeedbackManager alerts to VoiceAssistant ─────────
             while True:
                 msg, key = feedback_manager.get_next_feedback()
                 if msg is None:
                     break
-                # FeedbackPriority → assistant priority (0=en yüksek)
-                # VoiceAssistant'ın priority parametresi: 1=acil, 2=normal
+                # Map FeedbackPriority to assistant priority (1=urgent, 2=normal)
                 priority = 1 if "emergency" in key or "danger" in key else 2
                 force    = priority == 1
                 assistant.speak(msg, unique_key=f"p4:{key}", priority=priority, force=force)
 
-            # ── Orijinal navigasyon mantığı (Kişi 1 kodu korundu) ─────────────
+            # ── Core navigation logic ─────────────────────────────────────────
             active_this_frame      = {}
             current_person_det     = None
             current_person_direction = "ahead"
@@ -244,7 +243,7 @@ def main():
                     else:
                         active_this_frame[(label, direction)] = dist_str
 
-            # ── Aşama 1: İlk ortam kurulumu (3 saniye) ───────────────────────
+            # ── Phase 1: Initial environment scan (first 3 seconds) ───────────
             if not initial_scan_done:
                 if current_person_det:
                     is_person_in_room = True
@@ -276,9 +275,9 @@ def main():
                         }
                     initial_scan_done = True
 
-            # ── Aşama 2: Gerçek zamanlı navigasyon ───────────────────────────
+            # ── Phase 2: Real-time navigation ─────────────────────────────────
             else:
-                # A) İnsan takibi
+                # A) Person tracking
                 if current_person_det:
                     person_missing_frames = 0
                     area = current_person_det.area_ratio
@@ -324,7 +323,7 @@ def main():
                             person_distance_state = "unknown"
                             person_last_direction = "unknown"
 
-                # B) Diğer nesneler
+                # B) Other objects
                 for (label, direction), dist_str in active_this_frame.items():
                     if label == "cell phone" and dist_str == "very close":
                         assistant.speak(
@@ -351,7 +350,7 @@ def main():
                             unique_key=f"new:{label}", priority=2,
                         )
 
-                # Ortamdan kaybolanları sil
+                # Remove objects that have disappeared from the scene
                 keys_to_delete = []
                 for (label, direction), data in tracked_environment_memory.items():
                     if (label, direction) not in active_this_frame:
@@ -365,19 +364,19 @@ def main():
                 for k in keys_to_delete:
                     del tracked_environment_memory[k]
 
-            # ── Depth alert'leri TTS'e ilet ───────────────────────────────────
+            # ── Forward depth alerts to TTS ───────────────────────────────────
             if depth_result is not None:
                 for alert in depth_result.prop_alerts:
                     assistant.speak(alert, unique_key=f"depth:{alert}", priority=2)
 
-        # ── HUD ve ekran çizimi ───────────────────────────────────────────────
+        # ── HUD and frame rendering ───────────────────────────────────────────
         if depth_result is not None:
             try:
                 frame = depth_estimator.draw_overlay(frame, depth_result)
             except Exception:
                 pass
 
-        # Kişi 4 — danger zone overlay (her frame_skip'te hesaplanan sonuç varsa çiz)
+        # Draw danger zone overlay if available
         if ENABLE_HAZARD_DETECTION and 'p4_danger_result' in dir() and p4_danger_result:
             try:
                 frame = danger_analyzer.visualize(frame, p4_danger_result)

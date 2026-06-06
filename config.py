@@ -67,7 +67,7 @@ BOX_COLOR_PERSON   = (0, 255, 100)
 BOX_COLOR_OBSTACLE = (0, 100, 255)
 BOX_COLOR_DEFAULT  = (200, 200, 200)
 
-# ── HAZARD DETECTION (Kişi 4 — Melis) ────────────────────────────────────────
+# ── HAZARD DETECTION ──────────────────────────────────────────────────────────
 
 ENABLE_HAZARD_DETECTION = True
 
